@@ -1,10 +1,15 @@
 package mr
 
-import "fmt"
-import "log"
-import "net/rpc"
-import "hash/fnv"
-
+import (
+	"encoding/json"
+	"fmt"
+	"hash/fnv"
+	"io/ioutil"
+	"log"
+	"net/rpc"
+	"os"
+	"strconv"
+)
 
 //
 // Map functions return a slice of KeyValue.
@@ -24,6 +29,11 @@ func ihash(key string) int {
 	return int(h.Sum32() & 0x7fffffff)
 }
 
+type worker struct {
+	wid 		int
+	mapfunc 	func(string, string) []KeyValue
+	reducefunc 	func(string, []string) string
+}
 
 //
 // main/mrworker.go calls this function.
@@ -33,32 +43,120 @@ func Worker(mapf func(string, string) []KeyValue,
 
 	// Your worker implementation here.
 
-	// uncomment to send the Example RPC to the master.
-	// CallExample()
+	w := worker{mapfunc: mapf, reducefunc: reducef}
 
+	w.register()
+
+	// run and receive tasks
+	for {
+		task := w.requestTask()
+		log.Printf("Worker %d get task %+v", w.wid, task)
+		if task.TaskType == Map {
+			w.DoMap(task)
+		} else {
+			w.DoReduce(task)
+		}
+	}
 }
 
-//
-// example function to show how to make an RPC call to the master.
-//
-// the RPC argument and reply types are defined in rpc.go.
-//
-func CallExample() {
+func (w *worker) DoMap(task Task) {
+	content, _ := ioutil.ReadFile(task.Filename)
 
-	// declare an argument structure.
-	args := ExampleArgs{}
+	kva := w.mapfunc(task.Filename, string(content))
+	reduce := make([][]KeyValue, task.NReduce)
 
-	// fill in the argument(s).
-	args.X = 99
+	for _, kv := range kva {
+		idx := ihash(kv.Key) % task.NReduce
+		reduce[idx] = append(reduce[idx], kv)
+	}
 
-	// declare a reply structure.
-	reply := ExampleReply{}
+	for idx, r := range reduce {
+		filename := "mr-" + strconv.Itoa(task.Num) + "-" + strconv.Itoa(idx)
+		file, err := os.Create(filename)
+		if err != nil {
+			w.doneTask(task, false)
+			return
+		}
+		enc := json.NewEncoder(file)
+		for _, kv := range r {
+			err := enc.Encode(&kv)
+			if err != nil {
+				w.doneTask(task, false)
+				return
+			}
+		}
+		file.Close()
+	}
 
-	// send the RPC request, wait for the reply.
-	call("Master.Example", &args, &reply)
+	w.doneTask(task, true)
+}
 
-	// reply.Y should be 100.
-	fmt.Printf("reply.Y %v\n", reply.Y)
+func (w *worker) DoReduce(task Task) {
+	maps := make(map[string][]string)
+
+	for idx := 0; idx < task.NMap; idx++ {
+		filename := "mr-" + strconv.Itoa(idx) + "-" + strconv.Itoa(task.Num)
+		file, err := os.Open(filename)
+		if err != nil {
+			w.doneTask(task, false)
+			return
+		}
+		dec := json.NewDecoder(file)
+		for {
+			var kv KeyValue
+			err := dec.Decode(&kv)
+			if err != nil {
+				break
+			}
+			if _, ok := maps[kv.Key]; !ok {
+				maps[kv.Key] = make([]string, 0)
+			}
+			maps[kv.Key] = append(maps[kv.Key], kv.Value)
+		}
+	}
+
+	resFileName := "mr-out-" + strconv.Itoa(task.Num)
+	ofile, err := os.Create(resFileName)
+	if err != nil {
+		w.doneTask(task, false)
+		return
+	}
+
+	for key, values := range maps {
+		fmt.Fprintf(ofile, "%v %v\n", key,  w.reducefunc(key, values))
+	}
+
+	w.doneTask(task, true)
+}
+
+// RPC impl
+
+func (w *worker) register() {
+	args := RegisterArgs{}
+	reply := RegisterReply{}
+	ok := call("Master.Register", args, &reply)
+	if ok {
+		w.wid = reply.WID
+	}
+}
+
+func (w *worker) requestTask() Task {
+	args := GetTaskArgs{WID: w.wid}
+	reply := GetTaskReply{}
+	ok := call("Master.GetATask", args, &reply)
+	if !ok {
+		os.Exit(1)
+	}
+	return reply.Task
+}
+
+func (w *worker) doneTask(task Task, success bool) {
+	args := FinishTaskArgs{TaskNum: task.Num, Type: task.TaskType, WID: w.wid, Done: success}
+	reply := FinishTaskReply{}
+	ok := call("Master.FinishTask", args, &reply)
+	if !ok {
+		os.Exit(1)
+	}
 }
 
 //
