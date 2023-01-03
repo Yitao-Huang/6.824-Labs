@@ -1,13 +1,22 @@
 package kvraft
 
-import "../labrpc"
-import "crypto/rand"
-import "math/big"
+import (
+	"crypto/rand"
+	"math/big"
+	"time"
 
+	"../labrpc"
+)
+
+const (
+	ChangeLeaderInterval = time.Millisecond * 20
+)
 
 type Clerk struct {
-	servers []*labrpc.ClientEnd
+	servers  	[]*labrpc.ClientEnd
 	// You will have to modify this struct.
+	clientId 	int64
+	leaderId 	int
 }
 
 func nrand() int64 {
@@ -20,7 +29,8 @@ func nrand() int64 {
 func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
 	ck.servers = servers
-	// You'll have to add code here.
+	ck.clientId = nrand()
+	ck.leaderId = 0
 	return ck
 }
 
@@ -37,9 +47,36 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 // arguments. and reply must be passed as a pointer.
 //
 func (ck *Clerk) Get(key string) string {
+	args := GetArgs{Key: key, MsgId: nrand(), ClientId: ck.clientId}
+	leaderId := ck.leaderId
 
-	// You will have to modify this function.
-	return ""
+	for {
+		reply := GetReply{}
+		// log.Printf("client Get %+v", args)
+
+		ok := ck.servers[leaderId].Call("KVServer.Get", &args, &reply)
+
+		if !ok {
+			time.Sleep(ChangeLeaderInterval)
+			leaderId = (leaderId + 1) % len(ck.servers)
+			continue
+		}
+
+		switch reply.Err {
+		case OK:
+			ck.leaderId = leaderId
+			return reply.Value
+		case ErrNoKey:
+			ck.leaderId = leaderId
+			return ""
+		case ErrTimeOut:
+			continue
+		case ErrWrongLeader:
+			time.Sleep(ChangeLeaderInterval)
+			leaderId = (leaderId + 1) % len(ck.servers)
+			continue
+		}
+	}
 }
 
 //
@@ -53,7 +90,39 @@ func (ck *Clerk) Get(key string) string {
 // arguments. and reply must be passed as a pointer.
 //
 func (ck *Clerk) PutAppend(key string, value string, op string) {
-	// You will have to modify this function.
+	args := PutAppendArgs{
+		Key:      key,
+		Value:    value,
+		Op:       op,
+		MsgId:    nrand(),
+		ClientId: ck.clientId,
+	}
+
+	leaderId := ck.leaderId
+	for {
+		reply := PutAppendReply{}
+		// log.Printf("client PutAppend %+v", args)
+
+		ok := ck.servers[leaderId].Call("KVServer.PutAppend", &args, &reply)
+
+		if !ok {
+			time.Sleep(ChangeLeaderInterval)
+			leaderId = (leaderId + 1) % len(ck.servers)
+			continue
+		}
+
+		switch reply.Err {
+		case OK:
+			ck.leaderId = leaderId
+			return
+		case ErrTimeOut:
+			continue
+		case ErrWrongLeader:
+			time.Sleep(ChangeLeaderInterval)
+			leaderId = (leaderId + 1) % len(ck.servers)
+			continue
+		}
+	}
 }
 
 func (ck *Clerk) Put(key string, value string) {
