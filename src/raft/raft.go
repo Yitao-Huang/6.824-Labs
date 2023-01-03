@@ -76,17 +76,18 @@ type LogEntry struct {
 // A Go object implementing a single Raft peer.
 //
 type Raft struct {
-	mu        sync.Mutex          // lock to protect shared access to this peer's state
-	peers     []*labrpc.ClientEnd // RPC end points of all peers
-	persister *Persister          // Object to hold this peer's persisted state
-	me        int                 // this peer's index into peers[]
-	dead      int32               // set by Kill()
+	mu        			sync.Mutex          // lock to protect shared access to this peer's state
+	peers     			[]*labrpc.ClientEnd // RPC end points of all peers
+	persister 			*Persister          // Object to hold this peer's persisted state
+	me        			int                 // this peer's index into peers[]
+	dead      			int32               // set by Kill()
 
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
-	role Role
-	currentTerm int
+	role 				Role
+	currentTerm 		int
+	gid					int
 
 	electionTimer       *time.Timer
 	appendEntriesTimers []*time.Timer
@@ -94,15 +95,15 @@ type Raft struct {
 	notifyApplyCh       chan struct{}
 	killCh              chan struct{}
 
-	votedFor           int        // server id, -1 for null
-	logs        	  []LogEntry // lastSnapshot 放到 index 0
-	applyCh           chan ApplyMsg
-	commitIndex       int
-	lastSnapshotIndex int
-	lastSnapshotTerm  int
-	lastApplied       int
-	nextIndex         []int
-	matchIndex        []int
+	votedFor           	int        // server id, -1 for null
+	logs        	  	[]LogEntry // lastSnapshot 放到 index 0
+	applyCh           	chan ApplyMsg
+	commitIndex       	int
+	lastSnapshotIndex 	int
+	lastSnapshotTerm  	int
+	lastApplied       	int
+	nextIndex         	[]int
+	matchIndex        	[]int
 }
 
 // return currentTerm and whether this server
@@ -266,7 +267,7 @@ func (rf *Raft) startApplyLogs() {
 		msgs = make([]ApplyMsg, 0, 1)
 		msgs = append(msgs, ApplyMsg{
 			CommandValid: false,
-			Command:      "installSnapShot",
+			Command:      "InstallSnapShot",
 			CommandIndex: rf.lastSnapshotIndex,
 		})
 
@@ -331,6 +332,12 @@ func Make(peers []*labrpc.ClientEnd, me int, persister *Persister, applyCh chan 
 
 	// Your initialization code here (2A, 2B, 2C).
 	// initialize from state persisted before a crash
+
+	if len(gid) != 0 {
+		rf.gid = gid[0]
+	} else {
+		rf.gid = -1
+	}
 
 	rf.killCh = make(chan struct{})
 	rf.currentTerm = 0

@@ -118,3 +118,23 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 	rf.lastSnapshotTerm = args.LastIncludedTerm
 	rf.persister.SaveStateAndSnapshot(rf.getPersistData(), args.Data)
 }
+
+func (rf *Raft) TakeSnapshot(logIndex int, snapshotData []byte) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	// less than last snapshot
+	if logIndex <= rf.lastSnapshotIndex {
+		return
+	}
+
+	// update snapshot
+	lastLogIncluded := rf.getLogByIndex(logIndex)
+	rf.logs = rf.logs[rf.getIdxWithSnapshot(logIndex):]
+	rf.lastSnapshotIndex = logIndex
+	rf.lastSnapshotTerm = lastLogIncluded.Term
+
+	// persist state
+	persistData := rf.getPersistData()
+	rf.persister.SaveStateAndSnapshot(persistData, snapshotData)
+}
